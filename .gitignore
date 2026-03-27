@@ -1,0 +1,9 @@
+# APK build artifacts
+koyo_decompiled/
+koyo_protected/
+koyo_verify/
+koyo_protected.apk
+koyo_protected_unsigned.apk
+
+# Keystore (contains secrets)
+*.keystore
